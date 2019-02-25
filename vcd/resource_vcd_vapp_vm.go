@@ -27,7 +27,6 @@ func resourceVcdVAppVm() *schema.Resource {
 				Required: true,
 				ForceNew: true,
 			},
-
 			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
@@ -48,13 +47,11 @@ func resourceVcdVAppVm() *schema.Resource {
 				Required: true,
 				ForceNew: true,
 			},
-
 			"catalog_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-
 			"memory": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
@@ -73,7 +70,12 @@ func resourceVcdVAppVm() *schema.Resource {
 				Optional: true,
 				ForceNew: true,
 			},
-
+			"metadata": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				// For now underlying go-vcloud-director repo only supports
+				// a value of type String in this map.
+			},
 			"href": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
@@ -93,7 +95,6 @@ func resourceVcdVAppVm() *schema.Resource {
 				Type:     schema.TypeString,
 				Optional: true,
 			},
-
 			"network_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
@@ -397,11 +398,41 @@ func resourceVcdVAppVmUpdate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("error getting VM status: %#v", err)
 	}
 
-	// When there is more then one VM in a vApp Terraform will try to parallelise their creation.
-	// However, vApp throws errors when simultaneous requests are executed.
-	// To avoid them, below block is using retryCall in multiple places as a workaround,
-	// so that the VMs are created regardless of parallelisation.
-	if d.HasChange("memory") || d.HasChange("cpus") || d.HasChange("power_on") || d.HasChange("disk") {
+	if d.HasChange("metadata") {
+		oraw, nraw := d.GetChange("metadata")
+		ometadata := oraw.(map[string]interface{})
+		nmetdata := nraw.(map[string]interface{})
+		var toBeRemoveMetadata []string
+		// Check if any key in old metadata was removed in new metadata.
+		// Creates a list of keys to be removed.
+		for k := range ometadata {
+			if _, ok := nmetdata[k]; !ok {
+				toBeRemoveMetadata = append(toBeRemoveMetadata, k)
+			}
+		}
+		for _, k := range toBeRemoveMetadata {
+			task, err := vm.DeleteMetadata(k)
+			if err != nil {
+				return fmt.Errorf("error deleting metadata: %#v", err)
+			}
+			err = task.WaitTaskCompletion()
+			if err != nil {
+				return fmt.Errorf(errorCompletingTask, err)
+			}
+		}
+		for k, v := range nmetdata {
+			task, err := vm.AddMetadata(k, v.(string))
+			if err != nil {
+				return fmt.Errorf("error adding metadata: %#v", err)
+			}
+			err = task.WaitTaskCompletion()
+			if err != nil {
+				return fmt.Errorf(errorCompletingTask, err)
+			}
+		}
+	}
+
+	if d.HasChange("memory") || d.HasChange("cpus") || d.HasChange("power_on") {
 		if status != "POWERED_OFF" {
 			task, err := vm.PowerOff()
 			if err != nil {
