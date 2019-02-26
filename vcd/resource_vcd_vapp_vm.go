@@ -353,16 +353,18 @@ func resourceVcdVAppVmUpdate(d *schema.ResourceData, meta interface{}) error {
 		}
 
 		if d.Get("power_on").(bool) {
-			task, err := vm.PowerOn()
-			if err != nil {
-				return fmt.Errorf("error Powering Up: %#v", err)
-			}
-			err = task.WaitTaskCompletion()
+			err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
+				task, err := vm.PowerOn()
+				if err != nil {
+					return resource.RetryableError(fmt.Errorf("error Powering Up: %#v", err))
+				}
+
+				return resource.RetryableError(task.WaitTaskCompletion())
+			})
 			if err != nil {
 				return fmt.Errorf(errorCompletingTask, err)
 			}
 		}
-
 	}
 
 	return resourceVcdVAppVmRead(d, meta)
