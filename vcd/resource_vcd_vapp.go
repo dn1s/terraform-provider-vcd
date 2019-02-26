@@ -328,7 +328,6 @@ func resourceVcdVAppUpdate(d *schema.ResourceData, meta interface{}) error {
 	if d.HasChange("memory") || d.HasChange("cpus") || d.HasChange("power_on") || d.HasChange("ovf") {
 
 		if status != "POWERED_OFF" {
-
 			task, err := vapp.PowerOff()
 			if err != nil {
 				// can't *always* power off an empty vApp so not necesarrily an error
@@ -477,26 +476,30 @@ func resourceVcdVAppDelete(d *schema.ResourceData, meta interface{}) error {
 
 	vapp, err := vdc.FindVAppByName(d.Id())
 	if err != nil {
-		return fmt.Errorf("error finding vapp: %s", err)
+		return fmt.Errorf("error finding vApp: %s", err)
 	}
 
+	status, err := vapp.GetStatus()
 	if err != nil {
-		return fmt.Errorf("error getting VApp status: %#v", err)
+		return fmt.Errorf("error getting vApp status: %#v", err)
 	}
 
-	_ = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
-		task, err := vapp.Undeploy()
-		if err != nil {
-			return resource.RetryableError(fmt.Errorf("error undeploying: %#v", err))
-		}
+	log.Printf("[TRACE] vApp Status: %s", status)
+	if status == "POWERED_ON" {
+		err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
+			task, err := vapp.Undeploy()
+			if err != nil {
+				return resource.RetryableError(fmt.Errorf("error undeploying vApp: %#v", err))
+			}
 
-		return resource.RetryableError(task.WaitTaskCompletion())
-	})
+			return resource.RetryableError(task.WaitTaskCompletion())
+		})
+	}
 
 	err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
 		task, err := vapp.Delete()
 		if err != nil {
-			return resource.RetryableError(fmt.Errorf("error deleting: %#v", err))
+			return resource.RetryableError(fmt.Errorf("error deleting vApp: %#v", err))
 		}
 
 		return resource.RetryableError(task.WaitTaskCompletion())
