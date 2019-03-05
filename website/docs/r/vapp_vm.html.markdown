@@ -36,6 +36,12 @@ resource "vcd_vapp_vm" "web1" {
   memory        = 2048
   cpus          = 1
 
+  metadata {
+    role    = "web"
+    env     = "staging"
+    version = "v1"
+  }
+
   network_name = "net"
   ip           = "10.10.104.161"
 
@@ -49,6 +55,12 @@ resource "vcd_vapp_vm" "web2" {
   template_name = "lampstack-1.10.1-ubuntu-10.04"
   memory        = 2048
   cpus          = 1
+
+  metadata {
+    role    = "web"
+    env     = "staging"
+    version = "v2"
+  }
 
   network_name = "net"
   ip           = "10.10.104.162"
@@ -79,6 +91,7 @@ The following arguments are supported:
 * `template_name` - (Required) The name of the vApp Template to use
 * `memory` - (Optional) The amount of RAM (in MB) to allocate to the vApp
 * `cpus` - (Optional) The number of virtual CPUs to allocate to the vApp
+* `metadata` - (Optional) Key value map of metadata to assign to this VM
 * `initscript` (Optional) A script to be run only on initial boot
 * `network_name` - (Optional) Name of the network this VM should connect to
 * `vapp_network_name` - (Optional; *v2.1+*) Name of the vApp network this VM should connect to
@@ -91,6 +104,7 @@ The following arguments are supported:
 * `accept_all_eulas` - (Optional; *v2.0+*) Automatically accept EULA if OVA has it. Default is `true`
 * `org` - (Optional; *v2.0+*) The name of organization to use, optional if defined at provider level. Useful when connected as sysadmin working across different organisations
 * `vdc` - (Optional; *v2.0+*) The name of VDC to use, optional if defined at provider level
+<<<<<<< HEAD
 * `disk` - (Optional; *v2.1*) Independent disk attachment configuration. Details below
 
 Independent disk support the following attributes:
@@ -98,3 +112,5 @@ Independent disk support the following attributes:
 * `name` - (Required) Independent disk name
 * `bus_number` - (Required) Bus number on which to place the disk controller
 * `unit_number` - (Required) Unit number (slot) on the bus specified by BusNumber.
+=======
+>>>>>>> 5f0c03b... Add documentation for vm metadata attribute
