@@ -56,6 +56,8 @@ func TestAccVcdVAppVm_Basic(t *testing.T) {
 						"vcd_vapp_vm."+vmName, "ip", "10.10.102.161"),
 					resource.TestCheckResourceAttr(
 						"vcd_vapp_vm."+vmName, "power_on", "true"),
+					resource.TestCheckResourceAttr(
+						"vcd_vapp_vm."+vmName, "metadata.vm_metadata", "VM Metadata."),
 				),
 			},
 		},
@@ -165,6 +167,9 @@ resource "vcd_vapp_vm" "{{.VmName}}" {
     unit_number = 0
   }
 
+  metadata {
+    vm_metadata = "VM Metadata."
+  }
   depends_on    = ["vcd_vapp.{{.VappName}}","vcd_independent_disk.{{.diskResourceName}}"]
 }
 `
