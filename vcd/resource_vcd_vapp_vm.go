@@ -22,12 +22,13 @@ func resourceVcdVAppVm() *schema.Resource {
 		Delete: resourceVcdVAppVmDelete,
 
 		Schema: map[string]*schema.Schema{
-			"vapp_name": &schema.Schema{
+			"vapp_name": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"name": &schema.Schema{
+
+			"name": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -42,30 +43,40 @@ func resourceVcdVAppVm() *schema.Resource {
 				Optional: true,
 				ForceNew: true,
 			},
-			"template_name": &schema.Schema{
+			"template_name": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"catalog_name": &schema.Schema{
+
+			"catalog_name": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"memory": &schema.Schema{
+
+			"memory": {
 				Type:     schema.TypeInt,
 				Optional: true,
 			},
-			"cpus": &schema.Schema{
+			"cpus": {
 				Type:     schema.TypeInt,
 				Optional: true,
 			},
-			"ip": &schema.Schema{
+			"ip": {
+				Type:             schema.TypeString,
+				Optional:         true,
+				Computed:         true,
+				ConflictsWith:    []string{"networks"},
+				Deprecated: "In favor of networks parameter",
+				DiffSuppressFunc: suppressIfIpIsOneOf(),
+			},
+			"mac": {
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
 			},
-			"initscript": &schema.Schema{
+			"initscript": {
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
@@ -81,24 +92,66 @@ func resourceVcdVAppVm() *schema.Resource {
 				Optional: true,
 				Computed: true,
 			},
-			"accept_all_eulas": &schema.Schema{
+			"accept_all_eulas": {
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  true,
 			},
-			"power_on": &schema.Schema{
+			"power_on": {
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  true,
 			},
-			"network_href": &schema.Schema{
+			"network_href": {
 				Type:     schema.TypeString,
 				Optional: true,
 			},
-			"network_name": &schema.Schema{
+			"networks": {
+				Type:          schema.TypeList,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"ip"},
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"orgnetwork": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"ip": {
+							Type:             schema.TypeString,
+							Optional:         true,
+							Computed:         true,
+							DiffSuppressFunc: suppressIfIpIsOneOf(),
+						},
+						"ip_allocation_mode": {
+							Type:             schema.TypeString,
+							Optional:         true,
+							Default:          "POOL",
+							ValidateFunc:     checkIpAddressAllocationMode(),
+						},
+						"is_primary": {
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"adapter_type": {
+							Type:     schema.TypeString,
+							Optional: true,
+							ForceNew: true,
+						},
+						"mac": {
+							Type:     schema.TypeString,
+							Optional: true,
+							Computed: true,
+						},
+					},
+				},
+			},
+			"network_name": {
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
+				Deprecated: "In favor of networks parameter",
 			},
 			"vapp_network_name": &schema.Schema{
 				Type:     schema.TypeString,
@@ -125,6 +178,31 @@ func resourceVcdVAppVm() *schema.Resource {
 				Set:      resourceVcdVmIndependentDiskHash,
 			},
 		},
+	}
+}
+
+func checkIpAddressAllocationMode() schema.SchemaValidateFunc {
+	return func(val interface{}, key string) (warns []string, errs []error) {
+	 if v == "POOL" || v == "DHCP" || v == "MANUAL" || v == "NONE" {
+		 return 0
+	 }
+	 errs = append(errs, fmt.Errorf("ip_address_allocation_mode must be one of POOL, DHCP, MANUAL or NONE got: %v", v))
+   return 1
+ }
+}
+
+func suppressIfIpIsOneOf() schema.SchemaDiffSuppressFunc {
+	return func(k string, old string, new string, d *schema.ResourceData) bool {
+		switch {
+		case new == "dhcp" && old != "":
+			return true
+		case new == "allocated" && old != "":
+			return true
+		case new == "" && old != "":
+			return true
+		default:
+			return false
+		}
 	}
 }
 
@@ -186,10 +264,84 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 		}
 		task, err := vapp.AddVM(networks, vappNetworkName, vappTemplate, d.Get("name").(string), acceptEulas)
 
+		return fmt.Errorf("error finding Vapp: %#v", err)
+	}
+
+	netNames := []string{}
+	var nets []map[string]interface{}
+	network := d.Get("network_name").(string)
+	networks := d.Get("networks").([]interface{})
+
+	switch {
+	// network_name is not set. networks is set in config
+	case network == "" && len(networks) > 0:
+		for _, network := range networks {
+			n := network.(map[string]interface{})
+			nets = append(nets, n)
+			net, err := vdc.FindVDCNetwork(n["orgnetwork"].(string))
+			if err != nil {
+				return fmt.Errorf("Error finding OrgVCD Network: %#v", err)
+			}
+			netNames = append(netNames, net.OrgVDCNetwork.Name)
+		}
+		// network_name is set. networks is not set in config
+	case network != "" && len(networks) == 0:
+		network := map[string]interface{}{
+			"ip":           d.Get("ip").(string),
+			"is_primary":   true,
+			"orgnetwork":   d.Get("network_name").(string),
+			"adapter_type": "",
+		}
+		nets = append(nets, network)
+		netNames = append(netNames, d.Get("network_name").(string))
+	default:
+		err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
+			task, err := vapp.AddRAWNetworkConfig()
+			if err != nil {
+				return resource.RetryableError(fmt.Errorf("error assigning network to vApp: %#v", err))
+			}
+			return resource.RetryableError(task.WaitTaskCompletion())
+		})
+	}
+
+	vAppNetworkNames := []string{}
+	vAppNetworkConfig, err := vapp.GetNetworkConfigSection()
+	for _, vAppNetwork := range vAppNetworkConfig.NetworkConfig {
+		vAppNetworkNames = append(vAppNetworkNames, vAppNetwork.NetworkName)
+	}
+	// this checkes if a network is assigned to a vapp
+	if len(netNames) > 0 {
+		m := make(map[string]bool)
+		for i := 0; i < len(vAppNetworkNames); i++ {
+			m[vAppNetworkNames[i]] = true
+		}
+		for _, netName := range netNames {
+			// if the network is not assigned, assigne it to vapp
+			if _, ok := m[netName]; !ok {
+				err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
+					n, err := vdc.FindVDCNetwork(netName)
+					task, err := vapp.AppendNetworkConfig(n.OrgVDCNetwork)
+					if err != nil {
+						return resource.RetryableError(fmt.Errorf("failed to add network to vapp: %#v", err))
+					}
+					return resource.RetryableError(task.WaitTaskCompletion())
+				})
+				if err != nil {
+					return fmt.Errorf("the VDC networks '%s' must be assigned to the vApp. Currently this networks are assigned %s", netNames, vAppNetworkNames)
+				}
+			}
+		}
+	}
+
+	log.Printf("[TRACE] Found networks attached to vApp: %s", netNames)
+	log.Printf("[TRACE] Network Connections: %s", nets)
+
+	err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
+		log.Printf("[TRACE] Creating VM: %s", d.Get("name").(string))
+		task, err := vapp.AddVM(nets, vappTemplate, d.Get("name").(string), acceptEulas)
 		if err != nil {
 			return resource.RetryableError(fmt.Errorf("error adding VM: %#v", err))
 		}
-
 		return resource.RetryableError(task.WaitTaskCompletion())
 	})
 
@@ -432,7 +584,7 @@ func resourceVcdVAppVmUpdate(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	if d.HasChange("memory") || d.HasChange("cpus") || d.HasChange("power_on") {
+	if d.HasChange("memory") || d.HasChange("cpus") || d.HasChange("networks") || d.HasChange("power_on") {
 		if status != "POWERED_OFF" {
 			task, err := vm.PowerOff()
 			if err != nil {
@@ -477,6 +629,25 @@ func resourceVcdVAppVmUpdate(d *schema.ResourceData, meta interface{}) error {
 					return resource.RetryableError(fmt.Errorf("error changing cpu count: %#v", err))
 				}
 
+				return resource.RetryableError(task.WaitTaskCompletion())
+			})
+			if err != nil {
+				return fmt.Errorf(errorCompletingTask, err)
+			}
+		}
+
+		if d.HasChange("networks") {
+			n := []map[string]interface{}{}
+
+			nets := d.Get("networks").([]interface{})
+			for _, network := range nets {
+				n = append(n, network.(map[string]interface{}))
+			}
+			err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
+				task, err := vm.ChangeNetworkConfig(n, d.Get("ip").(string))
+				if err != nil {
+					return resource.RetryableError(fmt.Errorf("error changing network: %#v", err))
+				}
 				return resource.RetryableError(task.WaitTaskCompletion())
 			})
 			if err != nil {
@@ -600,8 +771,22 @@ func resourceVcdVAppVmRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.Set("name", vm.VM.Name)
-	if len(vm.VM.NetworkConnectionSection.NetworkConnection) > 0 {
+	networks := d.Get("networks").([]interface{})
+	network := d.Get("network_name").(string)
+	switch {
+	// network_name is not set. networks is set in config
+	case network != "" && len(networks) == 0:
 		d.Set("ip", vm.VM.NetworkConnectionSection.NetworkConnection[0].IPAddress)
+		d.Set("mac", vm.VM.NetworkConnectionSection.NetworkConnection[0].MACAddress)
+	case network == "" && len(networks) > 0:
+		var networks []map[string]interface{}
+		for index, net := range d.Get("networks").([]interface{}) {
+			n := net.(map[string]interface{})
+			n["ip"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].IPAddress
+			n["mac"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].MACAddress
+			networks = append(networks, n)
+			d.Set("networks", networks)
+		}
 	}
 	d.Set("href", vm.VM.HREF)
 
@@ -678,12 +863,12 @@ func resourceVcdVAppVmDelete(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("error getting VM4 : %#v", err)
 	}
 
-	status, err := vapp.GetStatus()
+	status, err := vm.GetStatus()
 	if err != nil {
-		return fmt.Errorf("error getting vApp status: %#v", err)
+		return fmt.Errorf("error getting VM status: %#v", err)
 	}
 
-	log.Printf("[TRACE] vApp Status:: %s", status)
+	log.Printf("[TRACE] VM Status: %s", status)
 	if status != "POWERED_OFF" {
 		log.Printf("[TRACE] Undeploying vApp: %s", vapp.VApp.Name)
 		err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
