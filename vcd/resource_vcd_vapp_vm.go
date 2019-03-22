@@ -68,7 +68,7 @@ func resourceVcdVAppVm() *schema.Resource {
 				Optional:         true,
 				Computed:         true,
 				ConflictsWith:    []string{"networks"},
-				Deprecated: "In favor of networks parameter",
+				Deprecated:       "In favor of networks parameter",
 				DiffSuppressFunc: suppressIfIpIsOneOf(),
 			},
 			"mac": {
@@ -110,7 +110,7 @@ func resourceVcdVAppVm() *schema.Resource {
 				Type:          schema.TypeList,
 				Optional:      true,
 				ForceNew:      true,
-				ConflictsWith: []string{"ip"},
+				ConflictsWith: []string{"ip", "network_name"},
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"orgnetwork": {
@@ -124,10 +124,10 @@ func resourceVcdVAppVm() *schema.Resource {
 							DiffSuppressFunc: suppressIfIpIsOneOf(),
 						},
 						"ip_allocation_mode": {
-							Type:             schema.TypeString,
-							Optional:         true,
-							Default:          "POOL",
-							ValidateFunc:     checkIpAddressAllocationMode(),
+							Type:         schema.TypeString,
+							Optional:     true,
+							Default:      "POOL",
+							ValidateFunc: checkIpAddressAllocationMode(),
 						},
 						"is_primary": {
 							Type:     schema.TypeBool,
@@ -148,9 +148,9 @@ func resourceVcdVAppVm() *schema.Resource {
 				},
 			},
 			"network_name": {
-				Type:     schema.TypeString,
-				Optional: true,
-				ForceNew: true,
+				Type:       schema.TypeString,
+				Optional:   true,
+				ForceNew:   true,
 				Deprecated: "In favor of networks parameter",
 			},
 			"vapp_network_name": &schema.Schema{
@@ -183,12 +183,12 @@ func resourceVcdVAppVm() *schema.Resource {
 
 func checkIpAddressAllocationMode() schema.SchemaValidateFunc {
 	return func(val interface{}, key string) (warns []string, errs []error) {
-	 if v == "POOL" || v == "DHCP" || v == "MANUAL" || v == "NONE" {
-		 return 0
-	 }
-	 errs = append(errs, fmt.Errorf("ip_address_allocation_mode must be one of POOL, DHCP, MANUAL or NONE got: %v", v))
-   return 1
- }
+		if val == "POOL" || val == "DHCP" || val == "MANUAL" || val == "NONE" {
+			return
+		}
+		errs = append(errs, fmt.Errorf("ip_address_allocation_mode must be one of POOL, DHCP, MANUAL or NONE got: %v", val))
+		return
+	}
 }
 
 func suppressIfIpIsOneOf() schema.SchemaDiffSuppressFunc {
@@ -257,25 +257,13 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
-		log.Printf("[TRACE] Creating VM: %s", d.Get("name").(string))
-		var networks []*types.OrgVDCNetwork
-		if network != nil {
-			networks = append(networks, network)
-		}
-		task, err := vapp.AddVM(networks, vappNetworkName, vappTemplate, d.Get("name").(string), acceptEulas)
-
-		return fmt.Errorf("error finding Vapp: %#v", err)
-	}
-
-	netNames := []string{}
+	var netNames []string
 	var nets []map[string]interface{}
-	network := d.Get("network_name").(string)
 	networks := d.Get("networks").([]interface{})
 
 	switch {
 	// network_name is not set. networks is set in config
-	case network == "" && len(networks) > 0:
+	case network == (&types.OrgVDCNetwork{}) && len(networks) > 0:
 		for _, network := range networks {
 			n := network.(map[string]interface{})
 			nets = append(nets, n)
@@ -286,7 +274,7 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 			netNames = append(netNames, net.OrgVDCNetwork.Name)
 		}
 		// network_name is set. networks is not set in config
-	case network != "" && len(networks) == 0:
+	case network != (&types.OrgVDCNetwork{}) && len(networks) == 0:
 		network := map[string]interface{}{
 			"ip":           d.Get("ip").(string),
 			"is_primary":   true,
@@ -295,14 +283,6 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 		}
 		nets = append(nets, network)
 		netNames = append(netNames, d.Get("network_name").(string))
-	default:
-		err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
-			task, err := vapp.AddRAWNetworkConfig()
-			if err != nil {
-				return resource.RetryableError(fmt.Errorf("error assigning network to vApp: %#v", err))
-			}
-			return resource.RetryableError(task.WaitTaskCompletion())
-		})
 	}
 
 	vAppNetworkNames := []string{}
@@ -425,7 +405,7 @@ func addVdcNetwork(networkNameToAdd string, vdc govcd.Vdc, vapp govcd.VApp, vcdC
 	}
 	vdcNetwork := net.OrgVDCNetwork
 
-	vAppNetworkConfig, err := vapp.GetNetworkConfig()
+	vAppNetworkConfig, err := vapp.GetNetworkConfigSection()
 
 	isAlreadyVappNetwork := false
 	for _, networkConfig := range vAppNetworkConfig.NetworkConfig {
@@ -454,7 +434,7 @@ func addVdcNetwork(networkNameToAdd string, vdc govcd.Vdc, vapp govcd.VApp, vcdC
 
 // Checks if vapp network available for using
 func isItVappNetwork(vAppNetworkName string, vapp govcd.VApp) (bool, error) {
-	vAppNetworkConfig, err := vapp.GetNetworkConfig()
+	vAppNetworkConfig, err := vapp.GetNetworkConfigSection()
 	if err != nil {
 		return false, fmt.Errorf("error getting vApp networks: %#v", err)
 	}
@@ -781,10 +761,12 @@ func resourceVcdVAppVmRead(d *schema.ResourceData, meta interface{}) error {
 		var networks []map[string]interface{}
 		for index, net := range d.Get("networks").([]interface{}) {
 			n := net.(map[string]interface{})
-			n["ip"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].IPAddress
-			n["mac"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].MACAddress
-			networks = append(networks, n)
-			d.Set("networks", networks)
+			if len(vm.VM.NetworkConnectionSection.NetworkConnection) > 0 {
+				n["ip"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].IPAddress
+				n["mac"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].MACAddress
+				networks = append(networks, n)
+				d.Set("networks", networks)
+			}
 		}
 	}
 	d.Set("href", vm.VM.HREF)

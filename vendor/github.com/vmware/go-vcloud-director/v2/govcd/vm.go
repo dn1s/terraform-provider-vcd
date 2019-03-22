@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -291,21 +292,6 @@ func (vm *VM) ChangeNetworkConfig(networks []map[string]interface{}, ip string) 
 					networkSection.PrimaryNetworkConnectionIndex = index
 				}
 			}
-		}
-
-		util.Logger.Printf("[DEBUG] Function ChangeNetworkConfig() for %s invoked", network["orgnetwork"])
-
-		networksection.Xmlns = "http://www.vmware.com/vcloud/v1.5"
-		networksection.Ovf = "http://schemas.dmtf.org/ovf/envelope/1"
-		networksection.Info = "Specifies the available VM network connections"
-
-		networksection.NetworkConnection[index].IPAddress = ipAddress
-		networksection.NetworkConnection[index].IPAddressAllocationMode = ipAllocationMode
-		networksection.NetworkConnection[index].NeedsCustomization = true
-		networksection.NetworkConnection[index].MACAddress = ""
-
-		if network["is_primary"] == true {
-			networksection.PrimaryNetworkConnectionIndex = index
 		}
 	}
 
@@ -751,6 +737,18 @@ func (vm *VM) GetQuestion() (types.VmPendingQuestion, error) {
 	// The request was successful
 	return *question, nil
 
+}
+
+func (vm *VM) GetMetadata(requestUri string) (*types.Metadata, error) {
+	return getMetadata(vm.client, requestUri)
+}
+
+func (vm *VM) DeleteMetadata(key string) (Task, error) {
+	return deleteMetadata(vm.client, key, vm.VM.HREF)
+}
+
+func (vm *VM) AddMetadata(key string, value string) (Task, error) {
+	return addMetadata(vm.client, key, value, vm.VM.HREF)
 }
 
 // Use the provide answer to existing VM question for operation which need additional response
