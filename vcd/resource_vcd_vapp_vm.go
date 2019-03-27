@@ -118,10 +118,9 @@ func resourceVcdVAppVm() *schema.Resource {
 							Required: true,
 						},
 						"ip": {
-							Type:             schema.TypeString,
-							Optional:         true,
-							Computed:         true,
-							DiffSuppressFunc: suppressIfIpIsOneOf(),
+							Type:     schema.TypeString,
+							Optional: true,
+							Computed: true,
 						},
 						"ip_allocation_mode": {
 							Type:         schema.TypeString,
@@ -135,9 +134,10 @@ func resourceVcdVAppVm() *schema.Resource {
 							Default:  false,
 						},
 						"adapter_type": {
-							Type:     schema.TypeString,
-							Optional: true,
-							ForceNew: true,
+							Type:             schema.TypeString,
+							Optional:         true,
+							ForceNew:         true,
+							DiffSuppressFunc: suppressIfAdapterIsEmpty(),
 						},
 						"mac": {
 							Type:     schema.TypeString,
@@ -206,6 +206,16 @@ func suppressIfIpIsOneOf() schema.SchemaDiffSuppressFunc {
 	}
 }
 
+func suppressIfAdapterIsEmpty() schema.SchemaDiffSuppressFunc {
+	return func(k string, old string, new string, d *schema.ResourceData) bool {
+		if new == "" && old != "" {
+			return true
+		} else {
+			return false
+		}
+	}
+}
+
 func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 	vcdClient := meta.(*VCDClient)
 
@@ -239,21 +249,20 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 	var network *types.OrgVDCNetwork
 
 	if d.Get("network_name").(string) != "" {
-		network, err = addVdcNetwork(d, vdc, vapp, vcdClient)
+		network, err = addVdcNetwork(d.Get("network_name").(string), vdc, vapp, vcdClient)
 		if err != nil {
 			return err
 		}
 	}
 
 	vappNetworkName := d.Get("vapp_network_name").(string)
-		if vappNetworkName != "" {
-			isVappNetwork, err := isItVappNetwork(vappNetworkName, vapp)
-			if err != nil {
-				return err
-			}
-			if !isVappNetwork {
-				return fmt.Errorf("vapp_network_name: %s is not found", vappNetworkName)
-			}
+	if vappNetworkName != "" {
+		isVappNetwork, err := isItVappNetwork(vappNetworkName, vapp)
+		if err != nil {
+			return err
+		}
+		if !isVappNetwork {
+			return fmt.Errorf("vapp_network_name: %s is not found", vappNetworkName)
 		}
 	}
 
@@ -263,7 +272,7 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 
 	switch {
 	// network_name is not set. networks is set in config
-	case network == (&types.OrgVDCNetwork{}) && len(networks) > 0:
+	case len(networks) > 0:
 		for _, network := range networks {
 			n := network.(map[string]interface{})
 			nets = append(nets, n)
@@ -274,7 +283,7 @@ func resourceVcdVAppVmCreate(d *schema.ResourceData, meta interface{}) error {
 			netNames = append(netNames, net.OrgVDCNetwork.Name)
 		}
 		// network_name is set. networks is not set in config
-	case network != (&types.OrgVDCNetwork{}) && len(networks) == 0:
+	case network != nil:
 		network := map[string]interface{}{
 			"ip":           d.Get("ip").(string),
 			"is_primary":   true,
@@ -754,20 +763,21 @@ func resourceVcdVAppVmRead(d *schema.ResourceData, meta interface{}) error {
 	network := d.Get("network_name").(string)
 	switch {
 	// network_name is not set. networks is set in config
-	case network != "" && len(networks) == 0:
+	case network != "":
 		d.Set("ip", vm.VM.NetworkConnectionSection.NetworkConnection[0].IPAddress)
 		d.Set("mac", vm.VM.NetworkConnectionSection.NetworkConnection[0].MACAddress)
-	case network == "" && len(networks) > 0:
-		var networks []map[string]interface{}
+	case len(networks) > 0:
+		var nets []map[string]interface{}
 		for index, net := range d.Get("networks").([]interface{}) {
 			n := net.(map[string]interface{})
 			if len(vm.VM.NetworkConnectionSection.NetworkConnection) > 0 {
+				n["adapter_type"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].NetworkAdapterType
 				n["ip"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].IPAddress
 				n["mac"] = vm.VM.NetworkConnectionSection.NetworkConnection[index].MACAddress
-				networks = append(networks, n)
-				d.Set("networks", networks)
+				nets = append(nets, n)
 			}
 		}
+		d.Set("networks", nets)
 	}
 	d.Set("href", vm.VM.HREF)
 
