@@ -184,12 +184,7 @@ func resourceVcdVAppCreate(d *schema.ResourceData, meta interface{}) error {
 			}
 
 			err = retryCall(vcdClient.MaxRetryTimeout, func() *resource.RetryError {
-				networks := []map[string]interface{}{map[string]interface{}{
-					"ip":         d.Get("ip").(string),
-					"is_primary": true,
-					"orgnetwork": d.Get("network_name").(string),
-				}}
-				task, err := vapp.ChangeNetworkConfig(networks, d.Get("ip").(string))
+				task, err := vapp.AppendNetworkConfig(net.OrgVDCNetwork)
 				if err != nil {
 					return resource.RetryableError(fmt.Errorf("error with Networking change: %#v", err))
 				}

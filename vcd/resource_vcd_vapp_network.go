@@ -207,7 +207,7 @@ func resourceVappNetworkRead(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("error finding Vapp: %#v", err)
 	}
 
-	vAppNetworkConfig, err := vapp.GetNetworkConfig()
+	vAppNetworkConfig, err := vapp.GetNetworkConfigSection()
 	if err != nil {
 		return fmt.Errorf("error getting vApp networks: %#v", err)
 	}
